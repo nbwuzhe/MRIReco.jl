@@ -107,7 +107,8 @@ function reconstruction_multiEcho(acqData::AcquisitionData{Complex{T}}
 
   # reconstruction
   Ireco = zeros(Complex{T}, prod(reconSize)*numContr, numChan, numSl, numRep)
-  @floop for l = 1:numRep, i = 1:numSl
+  #@floop for l = 1:numRep, i = 1:numSl
+  for l = 1:numRep, i = 1:numSl
     if encodingOps != nothing
       F = encodingOps[i]
     else
@@ -180,7 +181,8 @@ function reconstruction_multiCoil(acqData::AcquisitionData{T}
 
   # solve optimization problem
   Ireco = zeros(Complex{T}, prod(reconSize), numSl, numContr, numRep)
-  @floop for l = 1:numRep, k = 1:numSl
+  # @floop for l = 1:numRep, k = 1:numSl
+  for l = 1:numRep, k = 1:numSl
     if encodingOps != nothing
       E = encodingOps[:,k]
     else
@@ -256,7 +258,8 @@ function reconstruction_multiCoilMultiEcho(acqData::AcquisitionData{T}
   W = WeightingOp( vcat(weights...), numChan )
 
   Ireco = zeros(Complex{T}, prod(reconSize)*numContr, numSl, numRep)
-  @floop for l = 1:numRep, i = 1:numSl
+  # @floop for l = 1:numRep, i = 1:numSl
+  for l = 1:numRep, i = 1:numSl
     if encodingOps != nothing
       E = encodingOps[i]
     else

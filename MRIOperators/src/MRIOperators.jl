@@ -51,21 +51,24 @@ function vcat(A::AbstractLinearOperator, n::Int)
 end
 
 function diagOpProd(y::AbstractVector{T}, x::AbstractVector{T}, nrow::Int, xIdx, yIdx, ops :: AbstractLinearOperator...) where T
-  @floop for i=1:length(ops)
+  # @floop for i=1:length(ops)
+  for i=1:length(ops)
     mul!(view(y,yIdx[i]:yIdx[i+1]-1), ops[i], view(x,xIdx[i]:xIdx[i+1]-1))
   end
   return y
 end
 
 function diagOpTProd(y::AbstractVector{T}, x::AbstractVector{T}, ncol::Int, xIdx, yIdx, ops :: AbstractLinearOperator...) where T
-  @floop for i=1:length(ops)
+  # @floop for i=1:length(ops)
+  for i=1:length(ops)
     mul!(view(y,yIdx[i]:yIdx[i+1]-1), transpose(ops[i]), view(x,xIdx[i]:xIdx[i+1]-1))
   end
   return y
 end
 
 function diagOpCTProd(y::AbstractVector{T}, x::AbstractVector{T}, ncol::Int, xIdx, yIdx, ops :: AbstractLinearOperator...) where T
-  @floop for i=1:length(ops)
+  # @floop for i=1:length(ops)
+  for i=1:length(ops)
     mul!(view(y,yIdx[i]:yIdx[i+1]-1), adjoint(ops[i]), view(x,xIdx[i]:xIdx[i+1]-1))
   end
   return y
@@ -176,7 +179,8 @@ LinearOperators.storage_type(op::DiagNormalOp) = typeof(op.Mv5)
 function DiagNormalOp(normalOps, N, idx, y::Vector{T}) where {T}
 
   function produ!(y, normalOps, idx, x)
-    @floop for i=1:length(normalOps)
+    # @floop for i=1:length(normalOps)
+    for i=1:length(normalOps)
        mul!(view(y,idx[i]:idx[i+1]-1), normalOps[i], view(x,idx[i]:idx[i+1]-1))
     end
     return y

@@ -313,7 +313,7 @@ converts `acqData` into the equivalent `RawAcquisitionData` object.
 """
 function RawAcquisitionData(acqData::AcquisitionData{T,D}) where {T,D}
   # XML header
-  params = minimalHeader(ntuple(d->acqData.encodingSize[d],D), T.(acqData.fov), tr_name=string(trajectory(acqData,1)))
+  params = minimalHeader(ntuple(d->acqData.encodingSize[d],D), acqData.fov, tr_name=string(trajectory(acqData,1)))
   # acquisition counter
   counter = 1
   # profiles
