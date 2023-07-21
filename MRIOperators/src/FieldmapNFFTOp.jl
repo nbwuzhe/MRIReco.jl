@@ -2,11 +2,11 @@ export FieldmapNFFTOp, InhomogeneityData, createInhomogeneityData_
 
 include("ExpApproximation.jl")
 
-mutable struct InhomogeneityData{T}
+mutable struct InhomogeneityData{T,D}
   A_k::Matrix{Complex{T}}
   C_k::Matrix{Complex{T}}
   times::Vector{T}
-  Cmap::Matrix{Complex{T}}
+  Cmap::Array{Complex{T},D}
   t_hat::T
   z_hat::Complex{T}
   method::String
@@ -32,8 +32,7 @@ mutable struct FieldmapNFFTOp{T,F1,F2,D} <:AbstractLinearOperator{Complex{T}}
   idx::Vector{Vector{Int64}}
   circTraj::Bool
   shape::NTuple{D,Int64}
-  cparam::InhomogeneityData{T}
-
+  cparam::InhomogeneityData{T,D}
 end
 
 LinearOperators.storage_type(op::FieldmapNFFTOp) = typeof(op.Mv5)
@@ -96,6 +95,7 @@ function FieldmapNFFTOp(shape::NTuple{D,Int64}, tr::Trajectory,
   for κ=1:K
     idx[κ] = findall(x->x!=0.0, cparam.A_k[:,κ])
     plans[κ] = plan_nfft(nodes[:,idx[κ]], shape, m=3, σ=1.25, precompute = NFFT.POLYNOMIAL)
+    # plans[κ] = plan_nfft(nodes[:,idx[κ]], shape, m=3, σ=1.25, precompute = NFFT.POLYNOMIAL,fftflags=FFTW.ESTIMATE,blocking=true)
   end
   
   d = [zeros(Complex{T}, length(idx[κ])) for κ=1:K ]
@@ -171,7 +171,8 @@ function produ!(s::AbstractVector{T}, x::AbstractVector{T}, x_tmp::Vector{T},sha
 end
 
 function produ_inner!(K, C, A, shape, d, s, sp, plan, idx, x_, p)
-  @floop for κ=1:K
+  # @floop for κ=1:K
+  for κ=1:K
     p[κ][:] .= C[κ,:] .* x_
     mul!(d[κ], plan[κ], p[κ])
     
@@ -215,7 +216,8 @@ end
 
 function ctprodu_inner!(K, C, A, shape, d, y, sp, plan, idx, x_, p)
 
-  @floop for κ=1:K
+  # @floop for κ=1:K
+  for κ=1:K
      for k=1:length(idx[κ])
        d[κ][k] = conj.(A[idx[κ][k],κ]) * x_[idx[κ][k]]
      end
