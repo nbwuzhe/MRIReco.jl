@@ -3,8 +3,8 @@ export FieldmapNFFTOp, InhomogeneityData, createInhomogeneityData_
 include("ExpApproximation.jl")
 
 mutable struct InhomogeneityData{T,D}
-  A_k::Matrix{Complex{T}}
-  C_k::Matrix{Complex{T}}
+  A_k::Array{Complex{T},2}
+  C_k::Array{Complex{T},2}
   times::Vector{T}
   Cmap::Array{Complex{T},D}
   t_hat::T
@@ -101,6 +101,8 @@ function FieldmapNFFTOp(shape::NTuple{D,Int64}, tr::Trajectory,
   d = [zeros(Complex{T}, length(idx[κ])) for κ=1:K ]
   p = [zeros(Complex{T}, shape) for κ=1:K]
 
+  @info "K = $K ; Size of p is $(size(p)); Size of p[1] is $(size(p[1]))"
+
   circTraj = isCircular(tr)
 
   return FieldmapNFFTOp{T,Nothing,Function,D}(nrow, ncol, false, false
@@ -110,9 +112,19 @@ function FieldmapNFFTOp(shape::NTuple{D,Int64}, tr::Trajectory,
             , plans, idx, circTraj, shape, cparam)
 end
 
-function Base.copy(cparam::InhomogeneityData{T}) where T
+function Base.copy(cparam::InhomogeneityData{T,D}) where {T,D}
 
-  return cparam
+  # A_k = copy(cparam.A_k)
+  # C_k = copy(cparam.C_k)
+  # times = copy(cparam.times)
+  # Cmap = copy(cparam.Cmap)
+  # t_hat = copy(cparam.t_hat)
+  # z_hat = copy(cparam.z_hat)
+  # method = cparam.method
+
+  # return InhomogeneityData{T,D}(A_k,C_k,times,Cmap,t_hat,z_hat,method)
+
+  return deepcopy(cparam)
 
 end
 
@@ -144,12 +156,14 @@ function Base.copy(S::FieldmapNFFTOp{T,Nothing,Function,D}) where {T,D}
             , plans, idx, circTraj, shape, cparam)
 end
 
-function produ!(s::AbstractVector{T}, x::AbstractVector{T}, x_tmp::Vector{T},shape::Tuple, plan,
-               idx::Vector{Vector{Int64}}, cparam::InhomogeneityData,
-               shutter::Bool, d::Vector{Vector{T}}, p::Vector{Array{T,D}}) where {T,D}
+function produ!(s::AbstractVector{Complex{T}}, x::AbstractVector{Complex{T}}, x_tmp::Vector{Complex{T}},shape::Tuple, plan,
+               idx::Vector{Vector{Int64}}, cparam::InhomogeneityData{T,D},
+               shutter::Bool, d::Vector{Vector{Complex{T}}}, p::Vector{Array{Complex{T},D}}) where {T,D}
 
-  s .= zero(T)
-  K = size(cparam.A_k,2)
+  cparam_ = copy(cparam)
+
+  s .= zero(Complex{T})
+  K = size(cparam_.A_k,2)
 
   if shutter
     circularShutter!(reshape(x, shape), 1.0)
@@ -157,22 +171,25 @@ function produ!(s::AbstractVector{T}, x::AbstractVector{T}, x_tmp::Vector{T},sha
 
   # Preprocessing step when time and correctionMap are centered
   x_tmp .= x
-  if cparam.method == "nfft"
-    x_tmp .*= exp.(-vec(cparam.Cmap) * cparam.t_hat )
+  
+  if cparam_.method == "nfft"
+    x_tmp .*= exp.(-vec(cparam_.Cmap) * cparam_.t_hat )
   end
 
   sp = Threads.SpinLock()
-  produ_inner!(K,cparam.C_k, cparam.A_k, shape, d, s, sp, plan, idx, x_tmp, p)
+  produ_inner!(K,cparam_.C_k, cparam_.A_k, shape, d, s, sp, plan, idx, x_tmp, p)
 
   # Postprocessing step when time and correctionMap are centered
-  if cparam.method == "nfft"
-      s .*= exp.(-cparam.z_hat*(cparam.times .- cparam.t_hat) )
+  if cparam_.method == "nfft"
+      s .*= exp.(-cparam_.z_hat*(cparam_.times .- cparam_.t_hat) )
   end
 end
 
 function produ_inner!(K, C, A, shape, d, s, sp, plan, idx, x_, p)
   # @floop for κ=1:K
   for κ=1:K
+    @info "κ = $κ and K = $K"
+    
     p[κ][:] .= C[κ,:] .* x_
     mul!(d[κ], plan[κ], p[κ])
     
@@ -189,23 +206,25 @@ end
 
 
 function ctprodu!(y::AbstractVector{Complex{T}}, x::AbstractVector{Complex{T}}, x_tmp::Vector{Complex{T}}, shape::Tuple, plan, idx::Vector{Vector{Int64}},
-                 cparam::InhomogeneityData{T}, shutter::Bool, d::Vector{Vector{Complex{T}}}, p::Vector{Array{Complex{T},D}}) where {T,D}
+                 cparam::InhomogeneityData{T,D}, shutter::Bool, d::Vector{Vector{Complex{T}}}, p::Vector{Array{Complex{T},D}}) where {T,D}
+
+  cparam_ = copy(cparam)
 
   y .= zero(Complex{T})
-  K = size(cparam.A_k,2)
+  K = size(cparam_.A_k,2)
 
   x_tmp .= x
 
   # Preprocessing step when time and correctionMap are centered
-  if cparam.method == "nfft"
-      x_tmp .*= conj.(exp.(-cparam.z_hat*(cparam.times .- cparam.t_hat)))
+  if cparam_.method == "nfft"
+      x_tmp .*= conj.(exp.(-cparam_.z_hat*(cparam_.times .- cparam_.t_hat)))
   end
 
   sp = Threads.SpinLock()
-  ctprodu_inner!(K,cparam.C_k, cparam.A_k, shape, d, y, sp, plan, idx, x_tmp, p)
+  ctprodu_inner!(K,cparam_.C_k, cparam_.A_k, shape, d, y, sp, plan, idx, x_tmp, p)
 
-  if cparam.method == "nfft"
-    y .*=  conj(exp.(-vec(cparam.Cmap) * cparam.t_hat))
+  if cparam_.method == "nfft"
+    y .*=  conj(exp.(-vec(cparam_.Cmap) * cparam_.t_hat))
   end
 
   if shutter
@@ -276,5 +295,5 @@ function createInhomogeneityData_(times::Vector{T},
     z_hat += 1im*(minimum(imag(correctionmap)) + maximum(imag(correctionmap)))
     z_hat *= T(0.5)
 
-    return InhomogeneityData(A,C,vec(times),correctionmap,t_hat,z_hat,method)
+    return InhomogeneityData{T,D}(A,C,vec(times),correctionmap,t_hat,z_hat,method)
 end
