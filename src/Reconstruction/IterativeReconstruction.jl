@@ -290,3 +290,151 @@ function reconstruction_multiCoilMultiEcho(acqData::AcquisitionData{T}
 
   return makeAxisArray(Ireco, acqData)
 end
+
+"""
+Performs a SENSE-type iterative image reconstruction for multi-interleave spiral images with phase correction.
+Different slices and contrasts images are reconstructed independently.
+
+# Arguments
+* `acqData::AcquisitionData`            - AcquisitionData object that includes all spiral interleaves
+* `reconSize::NTuple{2,Int64}`          - size of image to reconstruct
+* `reg::Regularization`                 - Regularization to be used
+* `sparseTrafo::AbstractLinearOperator` - sparsifying transformation
+* `weights::Vector{Vector{Complex{<:AbstractFloat}}}` - sampling density of the trajectories in acqData
+* `L_inv::Array{Complex{<:AbstractFloat}}`        - noise decorrelation matrix
+* `solvername::String`                  - name of the solver to use
+* `senseMaps::Array{Complex{<:AbstractFloat}}`        - coil sensitivities
+* (`normalize::Bool=false`)             - adjust regularization parameter according to the size of k-space data
+* (`params::Dict{Symbol,Any}`)          - Dict with additional parameters
+"""
+function reconstruction_multiInterleave(acqData::AcquisitionData{T}
+                              , reconSize::NTuple{D,Int64}
+                              , reg::Vector{Regularization}
+                              , sparseTrafo
+                              , weights::Vector{Vector{Complex{T}}}
+                              , L_inv::Union{LowerTriangular{Complex{T}, Matrix{Complex{T}}}, Nothing}
+                              , solvername::String
+                              , senseMaps::Array{Complex{T}}
+                              , normalize::Bool=false
+                              , encodingOps=nothing
+                              , params::Dict{Symbol,Any}=Dict{Symbol,Any}()) where {D , T}
+
+  encDims = ndims(trajectory(acqData))
+  if encDims!=length(reconSize)
+    error("reco-dimensionality $(length(reconSize)) and encoding-dimensionality $(encDims) do not match")
+  end
+
+  numContr, numChan, numSl, numRep = numContrasts(acqData), numChannels(acqData), numSlices(acqData), numRepetitions(acqData)
+  encParams = getEncodingOperatorParams(;params...)
+
+  # noise decorrelation
+  senseMapsUnCorr = decorrelateSenseMaps(L_inv, senseMaps, numChan)
+
+  # set sparse trafo in reg
+  reg[1].params[:sparseTrafo] = sparseTrafo
+
+  # Split interleaves into multiple AcquisitionData objects
+  acqDataSet = splitMultiInterleaves(acqData)
+  numInterleave = length(acqDataSet)
+  pcMaps = params[:intlvPhaseMaps] # phase correction maps.
+  numSampPerRO = acqData.traj[1].numSamplingPerProfile
+
+  # solve optimization problem
+  Ireco = zeros(Complex{T}, prod(reconSize), numSl, numContr, numRep)
+  # @floop for l = 1:numRep, k = 1:numSl
+  for l = 1:numRep, k = 1:numSl
+    if encodingOps != nothing
+      E = encodingOps[:,k]
+    else      
+      E = Vector{Vector{MRIOperators.CompositeOp}}(undef, numInterleave)
+      for t = 1 : numInterleave
+        senseMapTemp = senseMapsUnCorr .* repeat(pcMaps[t], 1, 1, 1, numChan)
+        E[t] = encodingOps_parallel(acqDataSet[t], reconSize, senseMapTemp; slice=k, encParams...)
+      end
+    end
+
+    for j = 1:numContr
+      # Pre-weighting of k-space data
+      kdata = multiCoilData(acqData, j, k, rep=l) .* repeat(weights[j], numChan)
+
+      # Reshape k-space data, let spiral interleaves to be the last dimension.
+      kdata = reshape(kdata, (numSampPerRO, numInterleave, numChan))
+      kdata = permutedims(kdata, (1, 3, 2))
+      kdata = vec(kdata)
+      
+      # A vector to store full operator E for each spiral interleave
+      EAllIntlv = Vector{MRIOperators.CompositeOp}(undef, numInterleave)
+
+      # Calculate each full encoding matrix (including density compensation) for each spiral interleave/shot
+      for t = 1 : numInterleave
+        idxStart = (t-1) * numSampPerRO + 1 # Start and end index in kdata and traj of the current interleave
+        idxEnd = t * numSampPerRO
+        WTemp = WeightingOp(weights[j][idxStart : idxEnd],numChan)
+        EAllIntlv[t] = ∘(deepcopy(WTemp), E[t][j], isWeighting=true)   
+      end
+      
+      # Concatenate full encoding matrices vertically since interleave/shot is the last dimension of k-space data.
+      EFull = deepcopy(EAllIntlv[1])
+      for t = 2 : numInterleave
+        EFull = vcat(EFull, EAllIntlv[t])
+      end
+
+      EFullᴴEFull = normalOperator(EFull)
+      
+      solver = createLinearSolver(solvername, EFull; AᴴA=EFullᴴEFull, reg=reg, params...)
+      I = solve(solver, kdata; params...)
+
+      if isCircular( trajectory(acqData, j) )
+        circularShutter!(reshape(I, reconSize), 1.0)
+      end
+      Ireco[:,k,j,l] = I
+    end
+  end
+
+  Ireco_ = reshape(Ireco, volumeSize(reconSize, numSl)..., numContr, 1,numRep)
+
+  return makeAxisArray(Ireco_, acqData)
+end
+
+
+"""
+    splitMultiInterleaves(AcqData::AcquisitionData)
+Split an AcquisitionData with multiple interleaves into multiple AcquisitionData with single interleave.
+Returns an array with multiple AcquisitionData that each includes single interleave.
+This is the same as the function in GIRFReco, but here serves as an auxilary function for `reconstruction_multiInterleave`
+
+# Arguments
+* `AcqData`          - An AcquisitionData with multiple interleaves
+"""
+function splitMultiInterleaves(acqData::AcquisitionData)
+    numInterleave = acqData.traj[1].numProfiles
+    numSampPerRO = acqData.traj[1].numSamplingPerProfile
+
+    result = []
+
+    for l = 1 : numInterleave
+        # Index of readout in traj, times, kdata
+        idxStart = (l-1) * numSampPerRO + 1
+        idxEnd = l * numSampPerRO
+
+        # Copy the original acqData
+        acqDataTemp = deepcopy(acqData)
+
+        # Extract and correct the trajectory
+        acqDataTemp.traj[1].numProfiles = 1
+        acqDataTemp.traj[1].nodes = acqDataTemp.traj[1].nodes[:, idxStart:idxEnd]
+        acqDataTemp.traj[1].times = acqDataTemp.traj[1].times[idxStart:idxEnd]
+
+        # Extract the kspace data
+        for m = 1 : length(acqData.kdata)
+            acqDataTemp.kdata[m] = acqDataTemp.kdata[m][idxStart:idxEnd, :]
+        end
+
+        # Correct the sub sampling indices
+        acqDataTemp.subsampleIndices[1] = 1 : numSampPerRO
+
+        push!(result, acqDataTemp)
+    end
+
+    return result
+end
