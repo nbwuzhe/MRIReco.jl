@@ -101,14 +101,18 @@ function FieldmapNFFTOp(shape::NTuple{D,Int64}, tr::Trajectory,
   d = [zeros(Complex{T}, length(idx[κ])) for κ=1:K ]
   p = [zeros(Complex{T}, shape) for κ=1:K]
 
-  @info "K = $K ; Size of p is $(size(p)); Size of p[1] is $(size(p[1]))"
+  # @info "K = $K ; Size of p is $(size(p)); Size of p[1] is $(size(p[1]))"
 
   circTraj = isCircular(tr)
 
+  mul! = (res,x) -> produ!(res,x,x_tmp,shape,plans,idx,cparam,circTraj,d,p)
+  ctmul! = (res,y) -> ctprodu!(res,y,y_tmp,shape,plans,idx,cparam,circTraj,d,p)
+
   return FieldmapNFFTOp{T,Nothing,Function,D}(nrow, ncol, false, false
-            , (res,x) -> produ!(res,x,x_tmp,shape,plans,idx,cparam,circTraj,d,p)
+            , mul!
             , nothing
-            , (res,y) -> ctprodu!(res,y,y_tmp,shape,plans,idx,cparam,circTraj,d,p), 0, 0, 0, false, false, false, Complex{T}[], Complex{T}[]
+            , ctmul!
+            , 0, 0, 0, false, false, false, Complex{T}[], Complex{T}[]
             , plans, idx, circTraj, shape, cparam)
 end
 
@@ -186,12 +190,14 @@ function produ!(s::AbstractVector{Complex{T}}, x::AbstractVector{Complex{T}}, x_
 end
 
 function produ_inner!(K, C, A, shape, d, s, sp, plan, idx, x_, p)
-  # @floop for κ=1:K
-  for κ=1:K
-    @info "κ = $κ and K = $K"
+  @floop for κ=1:K
+  # for κ=1:K
+    # @info "κ = $κ and K = $K"
     
     p[κ][:] .= C[κ,:] .* x_
+    # @info "made it past pk "
     mul!(d[κ], plan[κ], p[κ])
+    # @info "made it past mul! "
     
     lock(sp)
     for k=1:length(idx[κ])
@@ -235,8 +241,8 @@ end
 
 function ctprodu_inner!(K, C, A, shape, d, y, sp, plan, idx, x_, p)
 
-  # @floop for κ=1:K
-  for κ=1:K
+  @floop for κ=1:K
+  # for κ=1:K
      for k=1:length(idx[κ])
        d[κ][k] = conj.(A[idx[κ][k],κ]) * x_[idx[κ][k]]
      end
