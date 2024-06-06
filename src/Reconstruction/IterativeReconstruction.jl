@@ -342,7 +342,7 @@ Different slices and contrasts images are reconstructed independently.
 """
 function reconstruction_multiInterleave(acqData::AcquisitionData{T}
                               , reconSize::NTuple{D,Int64}
-                              , reg::Vector{Regularization}
+                              , reg::Vector{AbstractRegularization}
                               , sparseTrafo
                               , weights::Vector{Vector{Complex{T}}}
                               , L_inv::Union{LowerTriangular{Complex{T}, Matrix{Complex{T}}}, Nothing}
