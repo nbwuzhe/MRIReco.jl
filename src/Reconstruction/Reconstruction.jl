@@ -52,7 +52,7 @@ function reconstruction(acqData::AcquisitionData, recoParams::Dict)
     elseif recoParams[:reco] == "multiCoilMultiEchoSubspace"
       return reconstruction_multiCoilMultiEcho_subspace(acqData; recoParams...)
     elseif recoParams[:reco] == "multiSpiralInterleave"
-        return reconstruction_multiInterleave(acqData, reconSize[1:encodingDims], reg, sparseTrafo, weights, L_inv, solvername, senseMaps, normalize, encOps, recoParams)
+        return reconstruction_multiInterleave(acqData; recoParams...)
     else
         @error "reco model $(recoParams[:reco]) not found"
     end

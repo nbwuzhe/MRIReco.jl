@@ -335,22 +335,21 @@ Different slices and contrasts images are reconstructed independently.
 * `sparseTrafo::AbstractLinearOperator` - sparsifying transformation
 * `weights::Vector{Vector{Complex{<:AbstractFloat}}}` - sampling density of the trajectories in acqData
 * `L_inv::Array{Complex{<:AbstractFloat}}`        - noise decorrelation matrix
-* `solvername::String`                  - name of the solver to use
+* `solver::Type{<:AbstractLinearSolver}`          - solver to use
 * `senseMaps::Array{Complex{<:AbstractFloat}}`        - coil sensitivities
 * (`normalize::Bool=false`)             - adjust regularization parameter according to the size of k-space data
 * (`params::Dict{Symbol,Any}`)          - Dict with additional parameters
 """
 function reconstruction_multiInterleave(acqData::AcquisitionData{T}
-                              , reconSize::NTuple{D,Int64}
-                              , reg::Vector{AbstractRegularization}
+                              ; reconSize::NTuple{D,Int64}
+                              , reg::Vector{<:AbstractRegularization}
                               , sparseTrafo
                               , weights::Vector{Vector{Complex{T}}}
                               , L_inv::Union{LowerTriangular{Complex{T}, Matrix{Complex{T}}}, Nothing}
-                              , solvername::String
+                              , solver::Type{<:AbstractLinearSolver}
                               , senseMaps::Array{Complex{T}}
-                              , normalize::Bool=false
                               , encodingOps=nothing
-                              , params::Dict{Symbol,Any}=Dict{Symbol,Any}()) where {D , T}
+                              , params...) where {D , T}
 
   encDims = ndims(trajectory(acqData))
   if encDims!=length(reconSize)
@@ -364,7 +363,16 @@ function reconstruction_multiInterleave(acqData::AcquisitionData{T}
   senseMapsUnCorr = decorrelateSenseMaps(L_inv, senseMaps, numChan)
 
   # set sparse trafo in reg
-  reg[1].params[:sparseTrafo] = sparseTrafo
+  temp = []
+  for (i,r) in enumerate(reg)
+    trafo = sparseTrafo[i]
+    if !isnothing(trafo)
+      push!(temp, TransformedRegularization(r, trafo))
+    else
+      push!(temp, r)
+    end
+  end
+  reg = identity.(temp)
 
   # Split interleaves into multiple AcquisitionData objects
   acqDataSet = splitMultiInterleaves(acqData)
@@ -374,53 +382,55 @@ function reconstruction_multiInterleave(acqData::AcquisitionData{T}
 
   # solve optimization problem
   Ireco = zeros(Complex{T}, prod(reconSize), numSl, numContr, numRep)
-  # @floop for l = 1:numRep, k = 1:numSl
-  for l = 1:numRep, k = 1:numSl
-    if encodingOps != nothing
-      E = encodingOps[:,k]
-    else      
-      E = Vector{Vector{MRIOperators.CompositeOp}}(undef, numInterleave)
-      for t = 1 : numInterleave
-        senseMapTemp = senseMapsUnCorr .* repeat(pcMaps[t], 1, 1, 1, numChan)
-        E[t] = encodingOps_parallel(acqDataSet[t], reconSize, senseMapTemp; slice=k, encParams...)
-      end
-    end
-
-    for j = 1:numContr
-      # Pre-weighting of k-space data
-      kdata = multiCoilData(acqData, j, k, rep=l) .* repeat(weights[j], numChan)
-
-      # Reshape k-space data, let spiral interleaves to be the last dimension.
-      kdata = reshape(kdata, (numSampPerRO, numInterleave, numChan))
-      kdata = permutedims(kdata, (1, 3, 2))
-      kdata = vec(kdata)
-      
-      # A vector to store full operator E for each spiral interleave
-      EAllIntlv = Vector{MRIOperators.CompositeOp}(undef, numInterleave)
-
-      # Calculate each full encoding matrix (including density compensation) for each spiral interleave/shot
-      for t = 1 : numInterleave
-        idxStart = (t-1) * numSampPerRO + 1 # Start and end index in kdata and traj of the current interleave
-        idxEnd = t * numSampPerRO
-        WTemp = WeightingOp(weights[j][idxStart : idxEnd],numChan)
-        EAllIntlv[t] = ∘(deepcopy(WTemp), E[t][j], isWeighting=true)   
-      end
-      
-      # Concatenate full encoding matrices vertically since interleave/shot is the last dimension of k-space data.
-      EFull = deepcopy(EAllIntlv[1])
-      for t = 2 : numInterleave
-        EFull = vcat(EFull, EAllIntlv[t])
+  let reg = reg # Fix @floop warning due to conditional/multiple assignment to reg  
+    @floop for l = 1:numRep, k = 1:numSl
+    # for l = 1:numRep, k = 1:numSl
+      if encodingOps != nothing
+        E = encodingOps[:,k]
+      else      
+        E = Vector{Vector{MRIOperators.CompositeOp}}(undef, numInterleave)
+        for t = 1 : numInterleave
+          senseMapTemp = senseMapsUnCorr .* repeat(pcMaps[t], 1, 1, 1, numChan)
+          E[t] = encodingOps_parallel(acqDataSet[t], reconSize, senseMapTemp; slice=k, encParams...)
+        end
       end
 
-      EFullᴴEFull = normalOperator(EFull)
-      
-      solver = createLinearSolver(solvername, EFull; AᴴA=EFullᴴEFull, reg=reg, params...)
-      I = solve(solver, kdata; params...)
+      for j = 1:numContr
+        # Pre-weighting of k-space data
+        kdata = multiCoilData(acqData, j, k, rep=l) .* repeat(weights[j], numChan)
 
-      if isCircular( trajectory(acqData, j) )
-        circularShutter!(reshape(I, reconSize), 1.0)
+        # Reshape k-space data, let spiral interleaves to be the last dimension.
+        kdata = reshape(kdata, (numSampPerRO, numInterleave, numChan))
+        kdata = permutedims(kdata, (1, 3, 2))
+        kdata = vec(kdata)
+        
+        # A vector to store full operator E for each spiral interleave
+        EAllIntlv = Vector{MRIOperators.CompositeOp}(undef, numInterleave)
+
+        # Calculate each full encoding matrix (including density compensation) for each spiral interleave/shot
+        for t = 1 : numInterleave
+          idxStart = (t-1) * numSampPerRO + 1 # Start and end index in kdata and traj of the current interleave
+          idxEnd = t * numSampPerRO
+          WTemp = WeightingOp(weights[j][idxStart : idxEnd],numChan)
+          EAllIntlv[t] = ∘(deepcopy(WTemp), E[t][j], isWeighting=true)   
+        end
+        
+        # Concatenate full encoding matrices vertically since interleave/shot is the last dimension of k-space data.
+        EFull = deepcopy(EAllIntlv[1])
+        for t = 2 : numInterleave
+          EFull = vcat(EFull, EAllIntlv[t])
+        end
+
+        EFullᴴEFull = normalOperator(EFull)
+        
+        solver = createLinearSolver(solver, EFull; AᴴA=EFullᴴEFull, reg=reg, params...)
+        I = solve(solver, kdata; params...)
+
+        if isCircular( trajectory(acqData, j) )
+          circularShutter!(reshape(I, reconSize), 1.0)
+        end
+        Ireco[:,k,j,l] = I
       end
-      Ireco[:,k,j,l] = I
     end
   end
 
