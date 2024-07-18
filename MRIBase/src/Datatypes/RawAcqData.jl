@@ -258,15 +258,15 @@ function rawdata(f::RawAcquisitionData; slice::Int=1, contrast::Int=1, repetitio
   # store one profile (kspace data) for each unique encoding status
   cnt = 1
   for l in posIdx # TODO: set of profiles (with unique encoding status)
-    if f.profiles[l].head.idx.slice+1 != slice || f.profiles[l].head.idx.contrast+1 != contrast || f.profiles[l].head.idx.repetition+1 != repetition
-      continue
-    end
+    # if f.profiles[l].head.idx.slice+1 != 0 || f.profiles[l].head.idx.contrast+1 != contrast || f.profiles[l].head.idx.repetition+1 != repetition
+    #   continue
+    # end
     i1 = f.profiles[l].head.discard_pre + 1
     i2 = i1+numSampPerProfile-1
     kdata[:,cnt,:] .= f.profiles[l].data[i1:i2, :]
-    if f.profiles[l].head.read_dir[1] < 0
-      kdata[:,cnt,:] .= reverse(kdata[:,cnt,:], dims=1)
-    end
+    # if f.profiles[l].head.read_dir[1] < 0
+    #   kdata[:,cnt,:] .= reverse(kdata[:,cnt,:], dims=1)
+    # end
     cnt += 1
   end
 
